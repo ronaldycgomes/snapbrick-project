@@ -50,6 +50,10 @@ venv/
 ENV/
 env/
 
+# Data Pipeline
+data-pipeline/ldraw_lib/
+data-pipeline/.venv/
+
 # ML / AI / Large Model Weights & Datasets
 *.pt
 *.pth

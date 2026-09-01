@@ -117,18 +117,28 @@ Ao abrir o repositório no PC **ROG Strix**, siga os passos abaixo para preparar
    docker compose up -d postgres
    ```
 
-4. **Ambiente Python & CUDA (Data Pipeline & ML):**
+4. **Ambiente Python & CUDA (Data Pipeline & ML com `uv`):**
    * Certifique-se de ter o **Python 3.11+**, **CUDA Toolkit 12.x** e **NVIDIA Drivers** atualizados.
-   * Crie o ambiente virtual para o pipeline de dados / visão computacional:
+   * Instale o `uv` (se ainda não possuir) e crie o ambiente virtual:
      ```bash
-     python -m venv .venv
-     # Windows:
-     .venv\Scripts\activate
-     # Linux:
+     # Instalação do uv (Linux / WSL)
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+     source $HOME/.local/bin/env
+
+     # Configurar ambiente virtual no data-pipeline
+     cd data-pipeline
+     uv venv
      source .venv/bin/activate
      ```
 
 5. **Próximo Objetivo Imediato no Strix (Sprint 1):**
-   * Configurar a biblioteca de peças base do LDraw (`data-pipeline/`).
-   * Desenvolver os scripts headless em Blender (`bpy` + Cycles/OptiX) para renderização sintética e geração do dataset inicial anotado no padrão YOLO (15 a 30 peças).
+   * **Baixar Catálogo de Peças 3D (LDraw):**
+     Execute o script de automação para download e extração das peças:
+     ```bash
+     cd data-pipeline
+     chmod +x download_ldraw.sh
+     ./download_ldraw.sh
+     ```
+   * **Geração de Dados Sintéticos:**
+     Desenvolver os scripts headless em Blender (`bpy` + Cycles/OptiX) para renderização sintética e geração do dataset inicial anotado no padrão YOLO (15 a 30 peças).
 
