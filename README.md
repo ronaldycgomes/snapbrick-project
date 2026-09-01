@@ -80,3 +80,55 @@ $$\mathcal{C}(S) = rac{\sum_{(p, c) \in I_{req}(S)} \min(n_{det}(p, c), n_{req}
 * **Sprint 3 (Semanas 5-6):** Engine de Matching e Banco de Dados (PostgreSQL + CSP).
 * **Sprint 4 (Semanas 7-8):** Backend API e Infraestrutura (FastAPI + Deploy em Cloud).
 * **Sprint 5 (Semanas 9-10):** Mobile Client (React Native + TypeScript).
+
+---
+
+## 7. Guia de Setup & Workflow Multi-Máquinas
+
+O ecossistema do SnapBrick foi arquitetado para desenvolvimento distribuído entre duas estações de trabalho:
+
+```
+┌──────────────────────────────────────┐       ┌──────────────────────────────────────┐
+│        MacBook Pro (M-Series)        │       │       ROG Strix (RTX 5070 GPU)       │
+│                                      │       │                                      │
+│  📱 Mobile (Expo / TypeScript)       │  Git  │  🎨 Data Pipeline (Blender / LDraw)  │
+│  ⚙️ Backend API (FastAPI / Docker)   │ ◄───► │  🧠 ML-Core (YOLOv11 / CUDA / ONNX)  │
+│  🗄️ PostgreSQL (Docker Compose)      │       │  ⚡ MLOps & TensorRT Export          │
+└──────────────────────────────────────┘       └──────────────────────────────────────┘
+```
+
+### 🚀 Onboarding no ROG Strix (Workstation de IA)
+
+Ao abrir o repositório no PC **ROG Strix**, siga os passos abaixo para preparar o ambiente:
+
+1. **Clonar o Repositório:**
+   ```bash
+   git clone https://github.com/ronaldycgomes/snapbrick-project.git
+   cd snapbrick-project
+   ```
+
+2. **Configurar Variáveis de Ambiente:**
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Subir Infraestrutura de Banco (Docker):**
+   ```bash
+   docker compose up -d postgres
+   ```
+
+4. **Ambiente Python & CUDA (Data Pipeline & ML):**
+   * Certifique-se de ter o **Python 3.11+**, **CUDA Toolkit 12.x** e **NVIDIA Drivers** atualizados.
+   * Crie o ambiente virtual para o pipeline de dados / visão computacional:
+     ```bash
+     python -m venv .venv
+     # Windows:
+     .venv\Scripts\activate
+     # Linux:
+     source .venv/bin/activate
+     ```
+
+5. **Próximo Objetivo Imediato no Strix (Sprint 1):**
+   * Configurar a biblioteca de peças base do LDraw (`data-pipeline/`).
+   * Desenvolver os scripts headless em Blender (`bpy` + Cycles/OptiX) para renderização sintética e geração do dataset inicial anotado no padrão YOLO (15 a 30 peças).
+
