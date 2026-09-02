@@ -131,14 +131,25 @@ Ao abrir o repositório no PC **ROG Strix**, siga os passos abaixo para preparar
      source .venv/bin/activate
      ```
 
-5. **Próximo Objetivo Imediato no Strix (Sprint 1):**
-   * **Baixar Catálogo de Peças 3D (LDraw):**
-     Execute o script de automação para download e extração das peças:
+5. **Progresso Realizado (Sprint 1 - Data Pipeline & 3D Rendering):**
+   * ✅ **Download do Catálogo LDraw:** Script de ingestão automatizada ([`download_ldraw.sh`](data-pipeline/download_ldraw.sh)) e biblioteca de peças/primitivas LDraw estruturada em `data-pipeline/ldraw_lib/`.
+   * ✅ **Script de Diagnóstico de Hardware:** Script ([`data-pipeline/src/check_gpu.py`](data-pipeline/src/check_gpu.py)) para inspeção e benchmark de aceleração CUDA/OptiX no WSL 2 com a NVIDIA RTX 5070.
+   * ✅ **Pipeline de Renderização Headless:** Script ([`data-pipeline/src/render_single_part.py`](data-pipeline/src/render_single_part.py)) implementado com:
+     - Parser recursivo de geometria LDraw (`.dat`) com resolução automática de sub-peças e primitivas.
+     - Câmera inteligente com enquadramento automático (*Auto-Framing*) via Bounding Box em 640x640.
+     - Iluminação de estúdio 3-pontos (*Key, Fill, Rim*) e Shaders PBR de plástico ABS LEGO.
+     - Suporte a seleção de cores via CLI (`--color red`, `blue`, `yellow`, `green`, `#HEX`).
+     - Aceleração por GPU com Ray Tracing no **Blender Cycles (CUDA)** executando a **< 1 segundo por imagem** na **RTX 5070**.
+     - Validação de renderização de teste em [`data-pipeline/output/test_3001.png`](data-pipeline/output/test_3001.png).
+
+   * 🚀 **Como Executar o Render de Peças:**
      ```bash
-     cd data-pipeline
-     chmod +x download_ldraw.sh
-     ./download_ldraw.sh
+     # Diagnóstico de GPU
+     blender -b -P data-pipeline/src/check_gpu.py
+
+     # Renderizar peça específica (ex: Brick 2x4 - 3001) com cor e samples personalizados
+     blender -b -P data-pipeline/src/render_single_part.py -- --part_id 3001 --color red --samples 128
      ```
-   * **Geração de Dados Sintéticos:**
-     Desenvolver os scripts headless em Blender (`bpy` + Cycles/OptiX) para renderização sintética e geração do dataset inicial anotado no padrão YOLO (15 a 30 peças).
+
+   * 🔜 **Próximo Passo (Card #4):** Implementar o pipeline de *Domain Randomization* (sorteio de rotações, fundos com texturas aleatórias e variações de iluminação) para geração massiva do dataset sintético para o YOLOv11.
 

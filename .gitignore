@@ -53,6 +53,8 @@ env/
 # Data Pipeline
 data-pipeline/ldraw_lib/
 data-pipeline/.venv/
+data-pipeline/output/*
+!data-pipeline/output/.gitkeep
 
 # ML / AI / Large Model Weights & Datasets
 *.pt
