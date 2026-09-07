@@ -142,14 +142,44 @@ Ao abrir o repositório no PC **ROG Strix**, siga os passos abaixo para preparar
      - Aceleração por GPU com Ray Tracing no **Blender Cycles (CUDA)** executando a **< 1 segundo por imagem** na **RTX 5070**.
      - Validação de renderização de teste em [`data-pipeline/output/test_3001.png`](data-pipeline/output/test_3001.png).
 
-   * 🚀 **Como Executar o Render de Peças:**
-     ```bash
-     # Diagnóstico de GPU
-     blender -b -P data-pipeline/src/check_gpu.py
+    * ✅ **Pipeline de Domain Randomization & Gerador de Dataset Sintético:** Script ([`data-pipeline/src/generate_dataset.py`](data-pipeline/src/generate_dataset.py)) implementado com:
+      - Sorteio e dispersão procedural de 32 classes (peças clássicas, acabamento e Technic) com algoritmo anti-sobreposição.
+      - Shaders de fundo procedurais com variação de superfícies (*Wood Grain, Granite/Stone, Fabric/Carpet, Matte/Painted*).
+      - Iluminação de cena dinâmica com randomização de posições, potência e temperaturas de cor (2800K a 6500K).
+      - Câmera móvel simulando fotografia de smartphone (distância focal 35-70mm, elevação 35°-85°, rastreamento de enquadramento).
+      - Cálculo e projeção matemática 3D para 2D com anotações automáticas de Bounding Boxes no formato YOLOv11 (`class_id x_center y_center width height`).
+      - Estruturação automática em splits `images/train` (1.000 imgs), `images/val` (150 imgs), `images/test` (50 imgs) e manifesto `dataset.yaml`.
+    * ✅ **Visualizador de Anotações:** Script ([`data-pipeline/src/visualize_labels.py`](data-pipeline/src/visualize_labels.py)) com suporte a OpenCV, Pillow e fallback vetorial puro em SVG/HTML.
 
-     # Renderizar peça específica (ex: Brick 2x4 - 3001) com cor e samples personalizados
-     blender -b -P data-pipeline/src/render_single_part.py -- --part_id 3001 --color red --samples 128
-     ```
+6. **Progresso Realizado (Sprint 2 - Visão Computacional & YOLOv11):**
+   * ✅ **Pipeline de Treinamento Acelerado por GPU (CUDA 13.0):** Script ([`ml-core/src/train.py`](ml-core/src/train.py)) com:
+     - Auditoria automática de hardware (RTX 5070 Laptop GPU, 8GB VRAM, cuDNN 9.24).
+     - Fine-tuning do **YOLOv11s** com Mixed Precision (`fp16`) e data augmentations (*Mosaic*, *MixUp*, *HSV Jitter*).
+     - Treinamento completo de 100 épocas atingindo **$mAP_{50} = 87.03\%$** e **$mAP_{50-95} = 74.74\%$** no conjunto de teste cego.
+     - Pesos otimizados salvos em [`ml-core/weights/best.pt`](ml-core/weights/best.pt).
+   * ✅ **Detector & Classificador de Cores Invariante CIE L\*a\*b\*:** Script ([`ml-core/src/detect.py`](ml-core/src/detect.py)) com:
+     - Recorte automático de ROI das peças detectadas e amostragem de cor central.
+     - Cálculo de distância fotométrica $\Delta E$ no espaço CIE L\*a\*b\* para identificação de cores oficiais LEGO com rejeição de sombras/brilho.
+     - Exportação de imagem anotada e manifesto de inventário em JSON estruturado.
+   * ✅ **Exportador & Otimizador ONNX:** Script ([`ml-core/src/export_onnx.py`](ml-core/src/export_onnx.py)) para conversão de pesos PyTorch em runtime ONNX otimizado com FP16 para inferência ultrarrápida no backend e mobile.
 
-   * 🔜 **Próximo Passo (Card #4):** Implementar o pipeline de *Domain Randomization* (sorteio de rotações, fundos com texturas aleatórias e variações de iluminação) para geração massiva do dataset sintético para o YOLOv11.
+7. **Como Executar os Módulos de ML:**
+   ```bash
+   # Ativar ambiente virtual
+   source .venv/bin/activate
+
+   # Treinar o modelo YOLOv11s na GPU
+   python ml-core/src/train.py --model yolo11s.pt --epochs 100 --batch 32
+
+   # Executar detecção e classificação de cor em uma foto
+   python ml-core/src/detect.py --image data-pipeline/output/IMG_0032.jpg --conf 0.25
+
+   # Exportar modelo treinado para ONNX
+   python ml-core/src/export_onnx.py
+   ```
+
+8. **Próximo Passo (Sprint 3 - Backend API & Matching Engine):**
+   - Configurar API FastAPI assíncrona (`backend/src/main.py`) e rotas REST.
+   - Modelar schemas do PostgreSQL com SQLAlchemy/Alembic (tabelas `models` e `model_inventory`).
+   - Implementar algoritmo CSP de Matching de peças e cálculo da taxa de cobertura $\mathcal{C}(S)$.
 
