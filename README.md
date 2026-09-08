@@ -168,8 +168,9 @@ Ao abrir o repositório no PC **ROG Strix**, siga os passos abaixo para preparar
    # Ativar ambiente virtual
    source .venv/bin/activate
 
-   # Treinar o modelo YOLOv11s na GPU
-   python ml-core/src/train.py --model yolo11s.pt --epochs 100 --batch 32
+   # Treinar o modelo YOLOv11 Medium na GPU (otimizado para estabilidade no WSL2 e 8GB VRAM)
+   # Tempo estimado na RTX 5070: ~45 a 60 minutos para 150 épocas (com early stopping)
+   python ml-core/src/train.py --model yolo11m.pt --epochs 150 --batch 16 --workers 2 --cache disk
 
    # Executar detecção e classificação de cor em uma foto
    python ml-core/src/detect.py --image data-pipeline/output/IMG_0032.jpg --conf 0.25
