@@ -188,95 +188,209 @@ def run_detection(
 
     class_names = load_yaml_names(dataset_yaml)
 
+# ==============================================================================
+# Sliced High-Resolution Inference (SAHI / Quadrant-based Detection)
+# ==============================================================================
+
+def compute_iou(box1: List[float], box2: List[float]) -> float:
+    """Compute Intersection over Union (IoU) between two bounding boxes [x1, y1, x2, y2]."""
+    xi1 = max(box1[0], box2[0])
+    yi1 = max(box1[1], box2[1])
+    xi2 = min(box1[2], box2[2])
+    yi2 = min(box1[3], box2[3])
+
+    inter_w = max(0, xi2 - xi1)
+    inter_h = max(0, yi2 - yi1)
+    inter_area = inter_w * inter_h
+
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union_area = area1 + area2 - inter_area
+
+    if union_area <= 0:
+        return 0.0
+    return inter_area / union_area
+
+
+def apply_global_nms(candidates: List[Dict[str, Any]], iou_thresh: float = 0.45) -> List[Dict[str, Any]]:
+    """Filter duplicate overlapping detections across multiple slices preserving highest score."""
+    if not candidates:
+        return []
+
+    # Sort by confidence descending
+    sorted_candidates = sorted(candidates, key=lambda x: x["confidence"], reverse=True)
+    kept: List[Dict[str, Any]] = []
+
+    for cand in sorted_candidates:
+        should_keep = True
+        for k in kept:
+            # Check IoU
+            iou = compute_iou(cand["bbox"], k["bbox"])
+            if iou > iou_thresh:
+                should_keep = False
+                break
+        if should_keep:
+            kept.append(cand)
+
+    return kept
+
+
+def run_detection(
+    image_path: Path,
+    weights_path: Path,
+    dataset_yaml: Path,
+    conf_thresh: float = 0.35,
+    iou_thresh: float = 0.45,
+    use_sliced: bool = True,
+    output_dir: Path = Path("ml-core/runs/inference")
+) -> Dict[str, Any]:
+    """Run full inference pipeline: High-Res Sliced Detection + color classification + JSON export."""
+    if not HAS_ULTRALYTICS or not HAS_CV2:
+        print("[ERROR] OpenCV and Ultralytics are required.", file=sys.stderr)
+        sys.exit(1)
+
+    if not image_path.exists():
+        raise FileNotFoundError(f"[ERROR] Image not found: {image_path}")
+    if not weights_path.exists():
+        raise FileNotFoundError(f"[ERROR] Weights not found: {weights_path}")
+
+    class_names = load_yaml_names(dataset_yaml)
+
     print("\n=======================================================")
-    print(" 🔍 SnapBrick Real-Time Detection & Recognition Engine")
+    print(" 🔍 SnapBrick High-Resolution Vision & Recognition Engine")
     print("=======================================================")
     print(f" • Input Image:     {image_path.name}")
     print(f" • Model Weights:   {weights_path}")
     print(f" • Confidence Cut:  {conf_thresh * 100:.0f}%")
+    print(f" • High-Res Slices: {'Enabled (Multi-Quadrant SAHI)' if use_sliced else 'Disabled (Single Full Pass)'}")
     print("=======================================================\n")
 
     # Load model
     model = YOLO(str(weights_path))
 
-    # Run inference
-    img_bgr = cv2.imread(str(image_path))
-    h_orig, w_orig = img_bgr.shape[:2]
+    # Robust image loading (handles smartphone EXIF orientation)
+    img_bgr = cv2.imread(str(image_path.resolve()))
+    if img_bgr is None:
+        try:
+            from PIL import Image, ImageOps
+            pil_img = Image.open(image_path.resolve())
+            pil_img = ImageOps.exif_transpose(pil_img).convert("RGB")
+            img_rgb = np.array(pil_img)
+            img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            raise RuntimeError(f"[ERROR] Failed to load image at {image_path}: {e}")
 
-    results = model.predict(
-        source=img_bgr,
-        conf=conf_thresh,
-        iou=iou_thresh,
-        imgsz=640,
-        verbose=False
-    )
+    h_orig, w_orig = img_bgr.shape[:2]
+    raw_candidates: List[Dict[str, Any]] = []
+
+    # 1. Global Full-Image Inference (catches large pieces like Plate 1x8, Wings)
+    full_results = model.predict(source=img_bgr, conf=conf_thresh, iou=iou_thresh, imgsz=640, verbose=False)
+    for r in full_results:
+        for box in r.boxes:
+            cls_id = int(box.cls[0].item())
+            conf = float(box.conf[0].item())
+            x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
+            raw_candidates.append({
+                "class_id": cls_id,
+                "confidence": conf,
+                "bbox": [max(0, x1), max(0, y1), min(w_orig - 1, x2), min(h_orig - 1, y2)]
+            })
+
+    # 2. Sliced Multi-Quadrant Inference for Tiny Pieces (Studs, Pins, Slopes)
+    if use_sliced and (w_orig > 1000 or h_orig > 1000):
+        # 3x3 overlapping grid with 25% overlap
+        grid_x = 3
+        grid_y = 3
+        tile_w = int(w_orig / (grid_x - 0.25 * (grid_x - 1)))
+        tile_h = int(h_orig / (grid_y - 0.25 * (grid_y - 1)))
+        step_x = int(tile_w * 0.75)
+        step_y = int(tile_h * 0.75)
+
+        slices = []
+        for gy in range(grid_y):
+            for gx in range(grid_x):
+                sx1 = min(gx * step_x, max(0, w_orig - tile_w))
+                sy1 = min(gy * step_y, max(0, h_orig - tile_h))
+                sx2 = min(sx1 + tile_w, w_orig)
+                sy2 = min(sy1 + tile_h, h_orig)
+                slices.append((sx1, sy1, sx2, sy2))
+
+        for sx1, sy1, sx2, sy2 in slices:
+            tile_crop = img_bgr[sy1:sy2, sx1:sx2]
+            if tile_crop.size == 0:
+                continue
+            slice_results = model.predict(source=tile_crop, conf=conf_thresh, iou=iou_thresh, imgsz=640, verbose=False)
+            for r in slice_results:
+                for box in r.boxes:
+                    cls_id = int(box.cls[0].item())
+                    conf = float(box.conf[0].item())
+                    lx1, ly1, lx2, ly2 = [int(v) for v in box.xyxy[0].tolist()]
+                    # Translate slice coords to global coords
+                    gx1 = max(0, min(w_orig - 1, lx1 + sx1))
+                    gy1 = max(0, min(h_orig - 1, ly1 + sy1))
+                    gx2 = max(0, min(w_orig - 1, lx2 + sx1))
+                    gy2 = max(0, min(h_orig - 1, ly2 + sy1))
+
+                    raw_candidates.append({
+                        "class_id": cls_id,
+                        "confidence": conf,
+                        "bbox": [gx1, gy1, gx2, gy2]
+                    })
+
+    # 3. Apply Global NMS to merge overlapping slice detections
+    filtered_detections = apply_global_nms(raw_candidates, iou_thresh=iou_thresh)
 
     detected_items: List[Dict[str, Any]] = []
     summary_counts: Dict[str, int] = {}
-
     annotated_img = img_bgr.copy()
 
-    # Distinct palette for drawing boxes
     BOX_COLORS = [
         (40, 40, 255), (40, 255, 40), (255, 140, 40), (40, 220, 255),
         (255, 40, 255), (0, 255, 255), (0, 165, 255), (200, 50, 200)
     ]
 
-    for r in results:
-        boxes = r.boxes
-        for box in boxes:
-            cls_id = int(box.cls[0].item())
-            conf = float(box.conf[0].item())
-            xyxy = box.xyxy[0].tolist()
-            x1, y1, x2, y2 = [int(v) for v in xyxy]
+    for det in filtered_detections:
+        cls_id = det["class_id"]
+        conf = det["confidence"]
+        x1, y1, x2, y2 = det["bbox"]
 
-            # Clamp coordinates
-            x1 = max(0, min(w_orig - 1, x1))
-            y1 = max(0, min(h_orig - 1, y1))
-            x2 = max(0, min(w_orig - 1, x2))
-            y2 = max(0, min(h_orig - 1, y2))
+        full_label = class_names.get(cls_id, f"Class_{cls_id}")
+        part_id = ""
+        if "(" in full_label and ")" in full_label:
+            part_id = full_label[full_label.rfind("(") + 1:full_label.rfind(")")]
+        else:
+            part_id = str(cls_id)
 
-            full_label = class_names.get(cls_id, f"Class_{cls_id}")
+        # High-res ROI extraction and color classification
+        roi = img_bgr[y1:y2, x1:x2]
+        color_name = classify_roi_color(roi)
 
-            # Extract Part ID from label format: "Name (PartID)"
-            part_id = ""
-            if "(" in full_label and ")" in full_label:
-                part_id = full_label[full_label.rfind("(") + 1:full_label.rfind(")")]
-            else:
-                part_id = str(cls_id)
+        item = {
+            "class_id": cls_id,
+            "part_id": part_id,
+            "name": full_label,
+            "color": color_name,
+            "confidence": round(conf, 4),
+            "bbox": [x1, y1, x2, y2]
+        }
+        detected_items.append(item)
 
-            # Extract ROI and classify color
-            roi = img_bgr[y1:y2, x1:x2]
-            color_name = classify_roi_color(roi)
+        key = f"{part_id}_{color_name.replace(' ', '_')}"
+        summary_counts[key] = summary_counts.get(key, 0) + 1
 
-            item = {
-                "class_id": cls_id,
-                "part_id": part_id,
-                "name": full_label,
-                "color": color_name,
-                "confidence": round(conf, 4),
-                "bbox": [x1, y1, x2, y2]
-            }
-            detected_items.append(item)
+        color_bgr = BOX_COLORS[cls_id % len(BOX_COLORS)]
+        cv2.rectangle(annotated_img, (x1, y1), (x2, y2), color_bgr, 3)
 
-            # Update inventory summary count
-            key = f"{part_id}_{color_name.replace(' ', '_')}"
-            summary_counts[key] = summary_counts.get(key, 0) + 1
-
-            # Draw annotation on image
-            color_bgr = BOX_COLORS[cls_id % len(BOX_COLORS)]
-            cv2.rectangle(annotated_img, (x1, y1), (x2, y2), color_bgr, 2)
-
-            display_text = f"{full_label.split('(')[0].strip()} [{color_name}] {conf:.2f}"
-            t_size = cv2.getTextSize(display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
-            c2 = x1 + t_size[0] + 6, max(0, y1 - t_size[1] - 8)
-            cv2.rectangle(annotated_img, (x1, y1), c2, color_bgr, -1)
-            cv2.putText(annotated_img, display_text, (x1 + 3, max(12, y1 - 4)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        display_text = f"{full_label.split('(')[0].strip()} [{color_name}] {conf:.2f}"
+        t_size = cv2.getTextSize(display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        c2 = x1 + t_size[0] + 8, max(0, y1 - t_size[1] - 10)
+        cv2.rectangle(annotated_img, (x1, y1), c2, color_bgr, -1)
+        cv2.putText(annotated_img, display_text, (x1 + 4, max(16, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
 
     # Save outputs
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_img_path = output_dir / f"detected_{image_path.name}"
+    out_img_path = output_dir / f"detected_highres_{image_path.name}"
     out_json_path = output_dir / f"inventory_{image_path.stem}.json"
 
     cv2.imwrite(str(out_img_path), annotated_img)
@@ -291,7 +405,7 @@ def run_detection(
     with open(out_json_path, "w", encoding="utf-8") as f:
         json.dump(inventory_payload, f, indent=2, ensure_ascii=False)
 
-    print(f"[RESULT] ✅ Detected {len(detected_items)} LEGO pieces in {image_path.name}!")
+    print(f"[RESULT] ✅ High-Res Inference: Detected {len(detected_items)} LEGO pieces in {image_path.name}!")
     print(f" • Annotated Visual:  {out_img_path}")
     print(f" • Inventory JSON:    {out_json_path}")
     print("\n--- Summary of Detected Inventory ---")
@@ -311,8 +425,9 @@ def main():
     parser.add_argument("--image", type=str, required=True, help="Path to input image file (e.g. data-pipeline/output/IMG_0032.jpg)")
     parser.add_argument("--weights", type=str, default="", help="Path to trained best.pt weights")
     parser.add_argument("--yaml", type=str, default="", help="Path to dataset.yaml")
-    parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold (0.0 to 1.0)")
+    parser.add_argument("--conf", type=float, default=0.35, help="Confidence threshold (0.0 to 1.0)")
     parser.add_argument("--iou", type=float, default=0.45, help="NMS IoU threshold")
+    parser.add_argument("--no_sliced", action="store_true", help="Disable multi-quadrant SAHI sliced inference")
     parser.add_argument("--output_dir", type=str, default="", help="Output directory for visual and JSON results")
 
     args = parser.parse_args()
@@ -328,6 +443,8 @@ def main():
         weights_path = Path(args.weights).resolve()
     else:
         weights_path = ml_core_dir / "weights" / "best.pt"
+        if not weights_path.exists():
+            weights_path = ml_core_dir / "runs" / "snapbrick_yolo11m_poc" / "weights" / "best.pt"
         if not weights_path.exists():
             weights_path = ml_core_dir / "runs" / "snapbrick_poc" / "weights" / "best.pt"
 
@@ -347,6 +464,7 @@ def main():
         dataset_yaml=yaml_path,
         conf_thresh=args.conf,
         iou_thresh=args.iou,
+        use_sliced=not args.no_sliced,
         output_dir=out_dir
     )
 
