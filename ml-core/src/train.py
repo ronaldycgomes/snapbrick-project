@@ -75,16 +75,17 @@ def check_hardware_and_environment() -> Dict[str, Any]:
 
 def train_yolo_model(
     data_yaml: Path,
-    model_name: str = "yolo11n.pt",
-    epochs: int = 50,
+    model_name: str = "yolo11m.pt",
+    epochs: int = 150,
     batch_size: int = 16,
     imgsz: int = 640,
     device: str = "0",
     project_dir: Path = Path("ml-core/runs"),
-    exp_name: str = "snapbrick_yolo11_poc",
+    exp_name: str = "snapbrick_yolo11m_poc",
     lr0: float = 0.01,
     patience: int = 25,
-    workers: int = 4
+    workers: int = 2,
+    cache: str = "disk"
 ) -> Optional[Path]:
     """Execute YOLOv11 fine-tuning on the synthetic dataset."""
     if not data_yaml.exists():
@@ -106,11 +107,29 @@ def train_yolo_model(
     print(f" • Image Resolution:        {imgsz}x{imgsz}")
     print(f" • Batch Size:              {batch_size}")
     print(f" • Training Epochs:         {epochs} (Early Stopping Patience: {patience})")
+    print(f" • DataLoader Workers:      {workers}")
+    print(f" • Dataset Cache Mode:      {cache} (Zero-RAM SSD Caching)")
     print(f" • Project Output:          {project_dir / exp_name}")
     print("=======================================================\n")
 
     # Load pre-trained weights
     model = YOLO(model_name)
+
+    # PyTorch WSL2 stability: set multiprocessing sharing strategy to file_system to avoid /dev/shm crashes
+    try:
+        import torch.multiprocessing
+        torch.multiprocessing.set_sharing_strategy('file_system')
+    except Exception:
+        pass
+
+    # Normalize cache argument for Ultralytics (False, 'disk', or 'ram')
+    cache_arg: Any = False
+    if cache.lower() in ("disk", "npy"):
+        cache_arg = "disk"
+    elif cache.lower() in ("ram", "true"):
+        cache_arg = "ram"
+    else:
+        cache_arg = False
 
     # Launch Training
     results = model.train(
@@ -123,10 +142,12 @@ def train_yolo_model(
         name=exp_name,
         patience=patience,
         workers=workers,
+        cache=cache_arg,      # 'disk' caches preprocessed .npy on SSD (instant loading, zero RAM spike)
         lr0=lr0,
-        amp=True,              # Automatic Mixed Precision (FP16) for Tensor Cores
+        cos_lr=True,          # Cosine Annealing Learning Rate Scheduler
+        amp=True,             # Automatic Mixed Precision (FP16) for Tensor Cores
         mosaic=1.0,           # Mosaic Data Augmentation
-        mixup=0.1,            # MixUp Augmentation
+        mixup=0.15,           # MixUp Augmentation
         degrees=15.0,         # Random rotation (+/- 15 deg)
         translate=0.1,        # Random translation (+/- 10%)
         scale=0.5,            # Random scaling (+/- 50%)
@@ -174,16 +195,17 @@ def train_yolo_model(
 def main():
     parser = argparse.ArgumentParser(description="SnapBrick YOLOv11 Training Script")
     parser.add_argument("--data", type=str, default="", help="Path to dataset.yaml")
-    parser.add_argument("--model", type=str, default="yolo11n.pt", help="Pretrained model weights (yolo11n.pt, yolo11s.pt, yolo11m.pt)")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
-    parser.add_argument("--batch", type=int, default=16, help="Batch size (e.g., 16 or 32 for 12GB VRAM)")
+    parser.add_argument("--model", type=str, default="yolo11m.pt", help="Pretrained model weights (yolo11n.pt, yolo11s.pt, yolo11m.pt)")
+    parser.add_argument("--epochs", type=int, default=150, help="Number of training epochs")
+    parser.add_argument("--batch", type=int, default=16, help="Batch size (16 is ideal for yolo11m on 8GB VRAM)")
     parser.add_argument("--imgsz", type=int, default=640, help="Image square resolution (640)")
     parser.add_argument("--device", type=str, default="0", help="CUDA device index (e.g., '0') or 'cpu'")
     parser.add_argument("--project", type=str, default="", help="Output directory for runs and checkpoints")
-    parser.add_argument("--name", type=str, default="snapbrick_poc", help="Experiment name")
+    parser.add_argument("--name", type=str, default="snapbrick_yolo11m_poc", help="Experiment name")
     parser.add_argument("--lr0", type=float, default=0.01, help="Initial learning rate")
-    parser.add_argument("--patience", type=int, default=20, help="Early stopping patience epochs")
-    parser.add_argument("--workers", type=int, default=4, help="DataLoader background worker threads")
+    parser.add_argument("--patience", type=int, default=25, help="Early stopping patience epochs")
+    parser.add_argument("--workers", type=int, default=2, help="DataLoader background worker threads (2 is optimal for WSL2)")
+    parser.add_argument("--cache", type=str, default="disk", choices=["disk", "ram", "none"], help="Dataset cache mode ('disk' is ultra-fast on SSD with 0 RAM overhead; 'ram' may freeze WSL; 'none' to disable)")
     parser.add_argument("--check_only", action="store_true", help="Audit hardware and environment only without training")
 
     args = parser.parse_args()
@@ -218,7 +240,8 @@ def main():
         exp_name=args.name,
         lr0=args.lr0,
         patience=args.patience,
-        workers=args.workers
+        workers=args.workers,
+        cache=args.cache
     )
 
 
